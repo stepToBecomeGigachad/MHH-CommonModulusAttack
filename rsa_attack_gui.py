@@ -1,6 +1,8 @@
+import os
 import time
 import secrets
 import random
+import json
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from sympy import isprime, gcdex, mod_inverse, Integer
@@ -98,10 +100,11 @@ class KeyGenWindow(tk.Toplevel):
         self.shared = shared
         self.title("🔑 Quản lý khóa RSA")
         self.configure(bg="#23272b")
+
         tk.Label(self, text="Quản lý khóa RSA", font=("Arial",22,"bold"),
                  bg="#23272b", fg="#f8f9fa").pack(pady=(20,10))
 
-        # Sinh khóa đơn
+        # 1) Sinh khóa tự động
         auto_fr = ttk.LabelFrame(self, text="1. Sinh khóa tự động")
         auto_fr.pack(fill="x", padx=20, pady=6)
         self.bits = tk.IntVar(value=512)
@@ -113,47 +116,47 @@ class KeyGenWindow(tk.Toplevel):
                    command=self.generate_keys)\
             .grid(row=0, column=2, padx=10)
 
-        # Nhập thủ công
+        # 2) Nhập thủ công
         manual_fr = ttk.LabelFrame(self, text="2. Nhập khóa thủ công")
         manual_fr.pack(fill="x", padx=20, pady=6)
-        ttk.Label(manual_fr, text="e1:", background="#23272b", foreground="#f8f9fa")\
-            .grid(row=0, column=0, padx=4, pady=4)
-        self.ent_e1 = ttk.Entry(manual_fr, width=20)
-        self.ent_e1.grid(row=0, column=1, padx=4, pady=4)
-        ttk.Label(manual_fr, text="e2:", background="#23272b", foreground="#f8f9fa")\
-            .grid(row=0, column=2, padx=4, pady=4)
-        self.ent_e2 = ttk.Entry(manual_fr, width=20)
-        self.ent_e2.grid(row=0, column=3, padx=4, pady=4)
-        ttk.Label(manual_fr, text="n:", background="#23272b", foreground="#f8f9fa")\
-            .grid(row=0, column=4, padx=4, pady=4)
-        self.ent_n = ttk.Entry(manual_fr, width=30)
-        self.ent_n.grid(row=0, column=5, padx=4, pady=4)
+        for idx, lbl in enumerate(("e1","e2","n")):
+            ttk.Label(manual_fr, text=lbl+":", background="#23272b", foreground="#f8f9fa")\
+                .grid(row=0, column=idx*2, padx=4, pady=4)
+            entry = ttk.Entry(manual_fr, width=20 if lbl!="n" else 30)
+            entry.grid(row=0, column=idx*2+1, padx=4, pady=4)
+            setattr(self, f"ent_{lbl}", entry)
         ttk.Button(manual_fr, text="Nhập", style="info.Outline.TButton",
                    command=self.load_manual)\
             .grid(row=0, column=6, padx=8)
 
-        # Scenario chung n
-        scenario_fr = ttk.LabelFrame(self, text="3. Scenario chung modulus")
-        scenario_fr.pack(fill="x", padx=20, pady=6)
-        ttk.Label(scenario_fr, text="Số lượng key:", background="#23272b", foreground="#f8f9fa")\
+        # 3) Show chi tiết
+        self.txt = scrolledtext.ScrolledText(self, height=8, font=("Consolas",12),
+                                             bg="#181a1b", fg="#e0e0e0", bd=0, relief="flat")
+        self.txt.configure(highlightbackground="#343a40", highlightcolor="#343a40")
+        self.txt.pack(expand=True, fill="both", padx=20, pady=10)
+
+        # 4) Scenario chung modulus
+        scen_fr = ttk.LabelFrame(self, text="4. Scenario chung modulus")
+        scen_fr.pack(fill="x", padx=20, pady=6)
+        ttk.Label(scen_fr, text="Số lượng key:", background="#23272b", foreground="#f8f9fa")\
             .grid(row=0, column=0, padx=5, pady=5)
         self.num_multi = tk.IntVar(value=6)
-        ttk.Entry(scenario_fr, textvariable=self.num_multi, width=5)\
+        ttk.Entry(scen_fr, textvariable=self.num_multi, width=5)\
             .grid(row=0, column=1, padx=5, pady=5)
-        ttk.Button(scenario_fr, text="Tạo scenario", style="primary.Outline.TButton",
+        ttk.Button(scen_fr, text="Tạo scenario", style="primary.Outline.TButton",
                    command=self.generate_multi)\
             .grid(row=0, column=2, padx=10)
         self.lst_multi = tk.Listbox(self, width=80, height=6)
         self.lst_multi.pack(padx=20, pady=4)
 
-        ttk.Button(self, text="4. Phát hiện cặp share n",
+        ttk.Button(self, text="5. Phát hiện cặp share n",
                    style="danger.Outline.TButton",
                    command=self.detect_common_modulus)\
             .pack(pady=6)
         self.lst_common = tk.Listbox(self, width=80, height=4)
         self.lst_common.pack(padx=20, pady=4)
 
-        ttk.Button(self, text="5. Chọn cặp để tấn công",
+        ttk.Button(self, text="6. Chọn cặp để tấn công",
                    style="info.Outline.TButton",
                    command=self.select_for_attack)\
             .pack(pady=(4,12))
@@ -164,9 +167,17 @@ class KeyGenWindow(tk.Toplevel):
     def generate_keys(self):
         bits = self.bits.get()
         try:
-            (e1, n), (e2, _), *_ = generate_rsa_keys(bits)
+            (e1, n), (e2, _), d1, d2, p, q, phi = generate_rsa_keys(bits)
             self.shared.update({'e1': e1, 'e2': e2, 'n': n})
-            messagebox.showinfo("OK", f"Sinh khóa xong:\ne1={e1}\ne2={e2}\nn={n}")
+            out = (
+                f"=== Khóa RSA ===\n"
+                f"p = {p}\nq = {q}\n"
+                f"n = {n}\nφ(n) = {phi}\n\n"
+                f"Public1: e1={e1}\nPrivate1: d1={d1}\n\n"
+                f"Public2: e2={e2}\nPrivate2: d2={d2}\n"
+            )
+            self.txt.delete(1.0, tk.END)
+            self.txt.insert(tk.END, out)
         except Exception as e:
             messagebox.showerror("Lỗi", str(e))
 
@@ -176,7 +187,9 @@ class KeyGenWindow(tk.Toplevel):
             e2 = int(self.ent_e2.get())
             n  = int(self.ent_n.get())
             self.shared.update({'e1': e1, 'e2': e2, 'n': n})
-            messagebox.showinfo("OK", f"Nhập thủ công:\ne1={e1}\ne2={e2}\nn={n}")
+            out = f"Đã nhập thủ công:\ne1={e1}\ne2={e2}\nn={n}\n"
+            self.txt.delete(1.0, tk.END)
+            self.txt.insert(tk.END, out)
         except Exception as e:
             messagebox.showerror("Lỗi", str(e))
 
@@ -192,11 +205,15 @@ class KeyGenWindow(tk.Toplevel):
         self.multi_keys = [{'e': e, 'n': n} for e, n in shared_keys] + random_keys
         random.shuffle(self.multi_keys)
 
+        # Ghi ra JSON
+        with open("scenario_keys.json", "w", encoding="utf-8") as f:
+            json.dump(self.multi_keys, f, indent=2)
+
         self.lst_multi.delete(0, tk.END)
         for i, k in enumerate(self.multi_keys):
             self.lst_multi.insert(
                 tk.END,
-                f"{i+1}. e={k['e']}, n… len={k['n'].bit_length()} bits"
+                f"{i+1}. e={k['e']}, len(n)={k['n'].bit_length()} bits"
             )
         self.lst_common.delete(0, tk.END)
         self.common_pairs = []
@@ -214,12 +231,11 @@ class KeyGenWindow(tk.Toplevel):
                         i1, i2 = idxs[a], idxs[b]
                         self.lst_common.insert(
                             tk.END,
-                            f"Cặp {i1+1} & {i2+1} len={n.bit_length()} bits"
+                            f"Cặp {i1+1} & {i2+1}, len(n)={n.bit_length()} bits"
                         )
                         self.common_pairs.append((i1, i2))
         if not self.common_pairs:
             self.lst_common.insert(tk.END, "Không tìm thấy cặp share modulus")
-
     def select_for_attack(self):
         sel = self.lst_common.curselection()
         if not sel:
@@ -227,10 +243,19 @@ class KeyGenWindow(tk.Toplevel):
             return
         i1, i2 = self.common_pairs[sel[0]]
         k1, k2 = self.multi_keys[i1], self.multi_keys[i2]
+        # CHỈNH LẠI Ở ĐÂY: xóa space trước 'e1'
         self.shared.update({
-            'e1': k1['e'], 'e2': k2['e'], 'n': k1['n']
+            'e1': k1['e'],
+            'e2': k2['e'],
+            'n':  k1['n']
         })
         messagebox.showinfo("OK", f"Chọn cặp {i1+1} & {i2+1} để tấn công!")
+
+    
+
+# EncryptWindow, AttackWindow, MainMenu unchanged; as in previous code.
+
+
 
 class EncryptWindow(tk.Toplevel):
     def __init__(self, master, shared):
@@ -259,22 +284,25 @@ class EncryptWindow(tk.Toplevel):
         e1 = self.shared.get('e1')
         e2 = self.shared.get('e2')
         n  = self.shared.get('n')
-        if not all((e1, e2, n)):
-            messagebox.showerror("Lỗi", "Chưa có public key!")
+        if not e1:
+            messagebox.showerror("Lỗi","Chưa sinh hoặc nhập khóa!")
             return
         pt = self.ent_pt.get()
+        if not pt:
+            messagebox.showerror("Lỗi", "Vui lòng nhập bản rõ!")
+            return
         m  = string_to_int(pt)
-        c1 = encrypt(m, e1, n)
-        c2 = encrypt(m, e2, n)
+        c1 = encrypt(m,e1,n)
+        c2 = encrypt(m,e2,n)
         out = (
-            f"Plaintext: '{pt}'\n"
-            f"m = {m}\n\n"
+            "=== Mã hóa ===\n\n"
+            f"Plain: '{pt}'\n m={m}\n\n"
             f"c1 = m^{e1} mod n = {c1}\n"
             f"c2 = m^{e2} mod n = {c2}\n"
         )
-        self.txt.delete(1.0, tk.END)
-        self.txt.insert(tk.END, out)
-        self.shared.update({'c1': c1, 'c2': c2})
+        self.txt.delete(1.0,tk.END)
+        self.txt.insert(tk.END,out)
+        self.shared.update({'c1':c1,'c2':c2})
 
 class AttackWindow(tk.Toplevel):
     def __init__(self, master, shared):
