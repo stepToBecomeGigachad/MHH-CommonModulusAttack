@@ -1,11 +1,11 @@
-import random
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-from sympy import isprime, gcdex, mod_inverse, Integer
+import time
 import secrets
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+from sympy import isprime, gcdex, mod_inverse, Integer
+import ttkbootstrap as tb  # pip install ttkbootstrap
 
-# Hàm sinh số nguyên tố với độ dài bits sử dụng secrets để an toàn hơn
-# Đảm bảo MSB và LSB là 1 để số luôn có đúng độ dài và là số lẻ
+# —— Utils RSA ——
 def generate_prime(bits):
     while True:
         p = secrets.randbits(bits)
@@ -13,220 +13,270 @@ def generate_prime(bits):
         if isprime(p):
             return p
 
-# Hàm tạo cặp khóa RSA cùng modulus n maar hai e cố định e1, e2
 def generate_rsa_keys(bits=512):
-    # Sinh hai số nguyên tố p, q khác nhau
     p = generate_prime(bits)
     q = generate_prime(bits)
     while q == p:
         q = generate_prime(bits)
-    # Tính n và phi(n)
     n = p * q
-    phi = (p - 1) * (q - 1)
-    # Chọn hai số mũ công khai phổ biến
-    e1 = 65537
-    e2 = 65539
-    # Tính khóa bí mật d1, d2 = e^{-1} mod phi
+    phi = (p-1)*(q-1)
+    e1, e2 = 65537, 65539
     d1 = mod_inverse(e1, phi)
     d2 = mod_inverse(e2, phi)
-    return (e1, n), (e2, n), d1, d2, p, q, phi
+    return (e1,n),(e2,n),d1,d2,p,q,phi
 
-# Chuyển chuỗi thành số nguyên để mã hóa
 def string_to_int(text):
-    return int.from_bytes(text.encode('utf-8'), byteorder='big')
+    return int.from_bytes(text.encode('utf-8'),'big')
 
-# Chuyển số nguyên trở lại chuỗi UTF-8 nếu khả thi
 def int_to_string(num):
     try:
-        num_bytes = (num.bit_length() + 7) // 8
-        return num.to_bytes(num_bytes, byteorder='big').decode('utf-8')
+        L = (num.bit_length()+7)//8
+        return num.to_bytes(L,'big').decode('utf-8')
     except:
         return str(num)
 
-# Hàm mã hóa đơn giản: m^e mod n
-def encrypt(m, e, n):
-    return pow(m, e, n)
+def encrypt(m,e,n):
+    return pow(m,e,n)
 
-# Tấn công Common Modulus Attack
-# Input: c1, c2 (ciphertexts), e1, e2, n
-# Output: plaintext m và chi tiết các bước
 def attack_common_modulus(c1, c2, e1, e2, n):
     steps = []
-    steps.append("=== Bắt đầu tấn công ===")
-    steps.append(f"Input: c1 = {c1}, c2 = {c2}, e1 = {e1}, e2 = {e2}, n = {n}")
-    # Chuyển sang Integer để dùng gcdex và mod_inverse
-    c1 = Integer(c1)
-    c2 = Integer(c2)
-    e1 = Integer(e1)
-    e2 = Integer(e2)
-    n  = Integer(n)
-
-    # Bước 1: Tìm a, b, g sao cho a*e1 + b*e2 = g = gcd(e1, e2)
-    steps.append("\nBước 1: Tính GCD(e1, e2) và hệ số")
-    a, b, g = gcdex(e1, e2)
-    steps.append(f"GCD({e1}, {e2}) = {g}")
-    steps.append(f"Tìm được: {a}*{e1} + {b}*{e2} = {g}")
-    # Nếu g != 1, không thể tấn công
-    if g != 1:
-        steps.append("Lỗi: e1 và e2 phải coprime!")
+    # Step 1
+    from sympy import gcd
+    g0 = gcd(e1, e2)
+    cond = (g0 == 1)
+    steps.append(
+        "BƯỚC 1: Kiểm tra điều kiện tấn công\n"
+        f"  - gcd(e1,e2) = gcd({e1},{e2}) = {g0}\n"
+        f"  - Chung n? (đang dùng chung n={n})\n"
+        f"  => Điều kiện {'thỏa mãn' if cond else 'không thỏa mãn'}"
+    )
+    if not cond:
         return None, steps
 
-    # Bước 2: Xử lý trường hợp a hoặc b âm (tính nghịch đảo)
-    steps.append("\nBước 2: Xử lý nghịch đảo nếu cần")
-    def mod_pow(x, y, n):
-        # Nếu mũ âm, tính nghịch đảo trước
-        if y < 0:
-            steps.append(f"Tính nghịch đảo của {x} mod {n}")
-            x = mod_inverse(x, n)
-            steps.append(f"Nghịch đảo = {x}")
-            y = -y
-        return pow(int(x), int(y), int(n))
+    # Step 2
+    a, b, g = gcdex(e1, e2)
+    steps.append(
+        "BƯỚC 2: Tính hệ số Bézout\n"
+        f"  - Tìm a,b sao cho a*e1 + b*e2 = 1\n"
+        f"  - Kết quả: {a}*{e1} + {b}*{e2} = {g}"
+    )
 
-    # Bước 3: Tính m = c1^a * c2^b mod n
-    steps.append("\nBước 3: Khôi phục bản rõ m = c1^a * c2^b mod n")
+    # Step 3
+    def mod_pow(x, exp, mod):
+        if exp < 0:
+            x = mod_inverse(x, mod)
+            exp = -exp
+        return pow(int(x), int(exp), int(mod))
+
     m1 = mod_pow(c1, a, n)
     m2 = mod_pow(c2, b, n)
-    steps.append(f"c1^{a} mod n = {m1}")
-    steps.append(f"c2^{b} mod n = {m2}")
-    m = (m1 * m2) % int(n)
-    steps.append(f"Bản rõ (dạng số) = {m}")
-    # Thử chuyển về chuỗi
-    try:
-        text = int_to_string(m)
-        steps.append(f"Bản rõ (chuỗi) = {text}")
-    except:
-        steps.append("Không thể chuyển sang chuỗi.")
+    m  = (m1 * m2) % n
+    steps.append(
+        "BƯỚC 3: Khôi phục bản rõ\n"
+        f"  - c1^{a} mod n = {m1}\n"
+        f"  - c2^{b} mod n = {m2}\n"
+        f"  => m = ({m1}*{m2}) mod {n} = {m}"
+    )
+
     return m, steps
 
-# Lớp ứng dụng GUI sử dụng Tkinter
-class RSAApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("RSA Attack Simulation")
-        self.root.geometry("1000x800")
-        self.keys = None  # Lưu khóa khi sinh
-        self.create_widgets()
-
-    def create_widgets(self):
-        # Notebook để tách tab
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(expand=True, fill='both', padx=10, pady=10)
-
-        # --- Tab Tạo khóa ---
-        key_frame = ttk.Frame(notebook)
-        notebook.add(key_frame, text="Tạo khóa RSA")
-        # Chọn độ dài khóa
-        ttk.Label(key_frame, text="Chọn độ dài khóa (bits):").pack(pady=5)
-        self.bits_var = tk.IntVar(value=512)
-        ttk.OptionMenu(key_frame, self.bits_var, 512, 512, 1024, 2048).pack(pady=5)
-        # Nút tạo khóa
-        ttk.Button(key_frame, text="Tạo khóa mới", command=self.generate_keys).pack(pady=10)
-        # Khu vực hiển thị thông tin khóa
-        self.key_output = scrolledtext.ScrolledText(key_frame, height=15)
-        self.key_output.pack(expand=True, fill='both', padx=10, pady=10)
-
-        # --- Tab Mã hóa ---
-        encrypt_frame = ttk.Frame(notebook)
-        notebook.add(encrypt_frame, text="Mã hóa")
-        ttk.Label(encrypt_frame, text="Nhập bản rõ (chuỗi):").pack(pady=5)
-        self.plaintext_entry = ttk.Entry(encrypt_frame, width=50)
-        self.plaintext_entry.pack(pady=5)
-        ttk.Button(encrypt_frame, text="Mã hóa", command=self.encrypt).pack(pady=10)
-        self.encrypt_output = scrolledtext.ScrolledText(encrypt_frame, height=15)
-        self.encrypt_output.pack(expand=True, fill='both', padx=10, pady=10)
-
-        # --- Tab Tấn công ---
-        attack_frame = ttk.Frame(notebook)
-        notebook.add(attack_frame, text="Tấn công")
-        # Khung nhập dữ liệu
-        input_frame = ttk.LabelFrame(attack_frame, text="Nhập thông tin")
-        input_frame.pack(fill='x', padx=10, pady=5)
-        labels = ["c1", "c2", "e1", "e2", "n"]
-        self.entries = {}
-        for i, lbl in enumerate(labels):
-            ttk.Label(input_frame, text=f"Bản mã {lbl}:").grid(row=i, column=0, padx=5, pady=5, sticky="e")
-            self.entries[lbl] = ttk.Entry(input_frame, width=60)
-            self.entries[lbl].grid(row=i, column=1, padx=5, pady=5)
-        # Nút tấn công
-        ttk.Button(attack_frame, text="Thực hiện tấn công", command=self.attack).pack(pady=10)
-        # Khu vực hiển thị kết quả và bước tấn công
-        self.attack_output = scrolledtext.ScrolledText(attack_frame, height=20)
-        self.attack_output.pack(expand=True, fill='both', padx=10, pady=10)
-
-    # Hàm sinh khóa khi nhấn nút
+# —— GUI Windows ——
+class KeyGenWindow(tk.Toplevel):
+    def __init__(self, master, shared):
+        super().__init__(master)
+        self.shared = shared
+        self.title("🔑 Sinh khóa RSA")
+        self.configure(bg="#23272b")
+        tk.Label(self, text="Sinh khóa RSA", font=("Arial",22,"bold"),
+                 bg="#23272b", fg="#f8f9fa").pack(pady=(20,10))
+        frm = ttk.Frame(self); frm.pack(pady=5)
+        ttk.Label(frm, text="Độ dài (bits):", font=("Arial",14),
+                  background="#23272b", foreground="#f8f9fa")\
+            .grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        self.bits = tk.IntVar(value=512)
+        ttk.OptionMenu(frm, self.bits, 512, 512, 1024, 2048)\
+            .grid(row=0, column=1, sticky="w", padx=8, pady=6)
+        ttk.Button(self, text="Tạo khóa", style="success.Outline.TButton",
+                   command=self.generate_keys).pack(pady=12)
+        self.txt = scrolledtext.ScrolledText(self, height=8,
+                                             font=("Consolas",12),
+                                             bg="#181a1b", fg="#e0e0e0",
+                                             bd=0, relief="flat")
+        self.txt.pack(expand=True, fill="both", padx=20, pady=10)
     def generate_keys(self):
-        bits = self.bits_var.get()
+        bits = self.bits.get()
         try:
-            self.keys = generate_rsa_keys(bits)
-            (e1, n), (e2, n), d1, d2, p, q, phi = self.keys
-            # Hiển thị chi tiết khóa
-            out = []
-            out.append("=== Thông tin khóa RSA ===\n")
-            out.append(f"Độ dài khóa: {bits} bit\n")
-            out.append(f"p = {p}\nq = {q}\n")
-            out.append(f"n = p*q = {n}\nφ(n) = {phi}\n\n")
-            out.append(f"Khóa công khai 1: (e1, n) = ({e1}, {n})\nKhóa bí mật 1: d1 = {d1}\n\n")
-            out.append(f"Khóa công khai 2: (e2, n) = ({e2}, {n})\nKhóa bí mật 2: d2 = {d2}\n")
-            self.key_output.delete(1.0, tk.END)
-            self.key_output.insert(tk.END, "".join(out))
-
-            # Auto-fill thông tin tấn công
-            self.entries['e1'].delete(0, tk.END); self.entries['e1'].insert(0, str(e1))
-            self.entries['e2'].delete(0, tk.END); self.entries['e2'].insert(0, str(e2))
-            self.entries['n' ].delete(0, tk.END); self.entries['n' ].insert(0, str(n))
-        except Exception as ex:
-            messagebox.showerror("Lỗi tạo khóa", str(ex))
-
-    # Hàm mã hóa khi nhấn nút
-    def encrypt(self):
-        if not self.keys:
-            messagebox.showerror("Lỗi", "Vui lòng tạo khóa trước!")
-            return
-        try:
-            plaintext = self.plaintext_entry.get()
-            m = string_to_int(plaintext)
-            (e1, n), (e2, n), _, _, _, _, _ = self.keys
-            c1 = encrypt(m, e1, n)
-            c2 = encrypt(m, e2, n)
-            # Hiển thị kết quả mã hóa
-            out = []
-            out.append("=== Mã hóa bản rõ ===\n\n")
-            out.append(f"Bản rõ (chuỗi): {plaintext}\n")
-            out.append(f"Bản rõ (số): {m}\n\n")
-            out.append(f"c1 = m^{e1} mod n = {c1}\n")
-            out.append(f"c2 = m^{e2} mod n = {c2}\n")
-            self.encrypt_output.delete(1.0, tk.END)
-            self.encrypt_output.insert(tk.END, "".join(out))
-            # Auto-fill ciphertext cho tab tấn công
-            self.entries['c1'].delete(0, tk.END); self.entries['c1'].insert(0, str(c1))
-            self.entries['c2'].delete(0, tk.END); self.entries['c2'].insert(0, str(c2))
-        except Exception as e:
-            messagebox.showerror("Lỗi khi mã hóa", str(e))
-
-    # Hàm tấn công khi nhấn nút
-    def attack(self):
-        try:
-            vals = {k: int(v.get()) for k, v in self.entries.items()}
-            recovered_m, steps = attack_common_modulus(
-                vals['c1'], vals['c2'], vals['e1'], vals['e2'], vals['n']
+            keys = generate_rsa_keys(bits)
+            (e1,n),(e2,_),d1,d2,p,q,phi = keys
+            out = (
+                f"=== Thông tin khóa ===\n"
+                f"bits: {bits}\n"
+                f"p={p}\nq={q}\n"
+                f"n={n}\nφ(n)={phi}\n\n"
+                f"Public1=(e1,n)=({e1},{n})\nPrivate1=d1={d1}\n\n"
+                f"Public2=(e2,n)=({e2},{n})\nPrivate2=d2={d2}\n"
             )
-            # Hiển thị các bước tấn công
-            self.attack_output.delete(1.0, tk.END)
-            for line in steps:
-                self.attack_output.insert(tk.END, line + "\n")
-            # Hiển thị kết quả cuối
-            if recovered_m is not None:
-                self.attack_output.insert(tk.END, "\n=== Kết quả tấn công ===\n")
-                self.attack_output.insert(tk.END, f"Bản rõ (số): {recovered_m}\n")
-                try:
-                    text = int_to_string(recovered_m)
-                    self.attack_output.insert(tk.END, f"Bản rõ (chuỗi): {text}\n")
-                except:
-                    self.attack_output.insert(tk.END, "Không thể chuyển sang chuỗi\n")
-        except ValueError:
-            messagebox.showerror("Lỗi", "Vui lòng nhập giá trị số nguyên hợp lệ!")
+            self.txt.delete(1.0,tk.END)
+            self.txt.insert(tk.END,out)
+            self.shared.update({
+                'e1': e1, 'e2': e2, 'n': n,
+                'c1': None, 'c2': None
+            })
+        except Exception as ex:
+            messagebox.showerror("Lỗi", str(ex))
+
+class EncryptWindow(tk.Toplevel):
+    def __init__(self, master, shared):
+        super().__init__(master)
+        self.shared = shared
+        self.title("🔒 Mã hóa RSA")
+        self.configure(bg="#23272b")
+        tk.Label(self, text="Mã hóa bản rõ", font=("Arial",22,"bold"),
+                 bg="#23272b", fg="#f8f9fa").pack(pady=(20,10))
+        frm = ttk.Frame(self); frm.pack(pady=5)
+        ttk.Label(frm, text="Nhập bản rõ:", font=("Arial",14),
+                  background="#23272b", foreground="#f8f9fa")\
+            .grid(row=0,column=0,sticky="e",padx=8,pady=6)
+        self.ent = ttk.Entry(frm, width=40, font=("Arial",13))
+        self.ent.grid(row=0,column=1,sticky="w",padx=8,pady=6)
+        ttk.Button(self, text="Mã hóa", style="info.Outline.TButton",
+                   command=self.encrypt).pack(pady=12)
+        self.txt = scrolledtext.ScrolledText(self, height=8,
+                                             font=("Consolas",12),
+                                             bg="#181a1b", fg="#e0e0e0",
+                                             bd=0, relief="flat")
+        self.txt.pack(expand=True, fill="both", padx=20, pady=10)
+    def encrypt(self):
+        e1 = self.shared.get('e1')
+        e2 = self.shared.get('e2')
+        n  = self.shared.get('n')
+        if not e1:
+            messagebox.showerror("Lỗi","Chưa sinh hoặc nhập khóa!")
+            return
+        pt = self.ent.get()
+        m  = string_to_int(pt)
+        c1 = encrypt(m,e1,n)
+        c2 = encrypt(m,e2,n)
+        out = (
+            "=== Mã hóa ===\n\n"
+            f"Plain: '{pt}'\n m={m}\n\n"
+            f"c1 = m^{e1} mod n = {c1}\n"
+            f"c2 = m^{e2} mod n = {c2}\n"
+        )
+        self.txt.delete(1.0,tk.END)
+        self.txt.insert(tk.END,out)
+        self.shared.update({'c1':c1,'c2':c2})
+
+class AttackWindow(tk.Toplevel):
+    def __init__(self, master, shared):
+        super().__init__(master)
+        self.shared = shared
+        self.title("⚔️ Tấn công Common Modulus")
+        self.configure(bg="#23272b")
+        tk.Label(self, text="Common Modulus Attack", font=("Arial",22,"bold"),
+                 bg="#23272b", fg="#f8f9fa").pack(pady=(20,10))
+        frm = ttk.LabelFrame(self, text="C1, C2, E1, E2, N", style="info.TLabelframe")
+        frm.pack(fill="x", padx=20, pady=8)
+        self.entries = {}
+        for i, lbl in enumerate(("c1","c2","e1","e2","n")):
+            ttk.Label(frm, text=lbl+":", font=("Arial",13),
+                      background="#23272b", foreground="#f8f9fa")\
+             .grid(row=i,column=0,sticky="e",padx=6,pady=4)
+            ent = ttk.Entry(frm, width=45, font=("Arial",12))
+            ent.grid(row=i,column=1,sticky="w",padx=6,pady=4)
+            # auto-fill
+            val = self.shared.get(lbl)
+            if val is not None:
+                ent.insert(0,str(val))
+            self.entries[lbl] = ent
+
+        ttk.Button(self, text="Tấn công", style="danger.Outline.TButton",
+                   command=self.start_attack).pack(pady=12)
+
+        self.txt = scrolledtext.ScrolledText(self, height=10,
+                                             font=("Consolas",12),
+                                             bg="#181a1b", fg="#e0e0e0",
+                                             bd=0, relief="flat")
+        self.txt.pack(expand=True, fill="both", padx=20, pady=6)
+
+        nav = ttk.Frame(self); nav.pack(pady=(0,16))
+        self.btn_prev = ttk.Button(nav, text="← Bước trước", command=self.prev_step, state="disabled")
+        self.btn_prev.grid(row=0,column=0,padx=8)
+        self.lbl_ctr  = ttk.Label(nav, text="0/0", font=("Arial",12),
+                                  background="#23272b", foreground="#f8f9fa")
+        self.lbl_ctr.grid(row=0,column=1,padx=8)
+        self.btn_next = ttk.Button(nav, text="Bước sau →", command=self.next_step, state="disabled")
+        self.btn_next.grid(row=0,column=2,padx=8)
+
+        self.steps = []
+        self.current = 0
+
+    def start_attack(self):
+        # đọc input
+        try:
+            vals = {k:int(v.get()) for k,v in self.entries.items()}
+        except:
+            messagebox.showerror("Lỗi","Giá trị phải là số nguyên hợp lệ!")
+            return
+        t0 = time.perf_counter()
+        m, steps = attack_common_modulus(
+            vals['c1'], vals['c2'],
+            vals['e1'], vals['e2'],
+            vals['n']
+        )
+        t1 = time.perf_counter()
+        # thêm dòng thời gian & kết quả
+        steps.append(f"⏱️ Thời gian: {(t1-t0)*1000:.2f} ms")
+        if m is not None:
+            steps.append(f"Kết quả số: {m}")
+            try:
+                steps.append(f"Kết quả chuỗi: {int_to_string(m)}")
+            except: pass
+
+        self.steps = steps
+        self.current = 0
+        self.btn_prev.config(state="disabled")
+        self.btn_next.config(state="normal" if len(steps)>1 else "disabled")
+        self.show_step()
+
+    def show_step(self):
+        self.txt.delete(1.0, tk.END)
+        self.txt.insert(tk.END, self.steps[self.current])
+        total = len(self.steps)
+        self.lbl_ctr.config(text=f"{self.current+1}/{total}")
+        self.btn_prev.config(state="normal" if self.current>0 else "disabled")
+        self.btn_next.config(state="normal" if self.current<total-1 else "disabled")
+
+    def prev_step(self):
+        if self.current>0:
+            self.current -= 1
+            self.show_step()
+
+    def next_step(self):
+        if self.current < len(self.steps)-1:
+            self.current += 1
+            self.show_step()
+
+# —— Main Menu ——
+class MainMenu(tb.Window):
+    def __init__(self):
+        super().__init__(themename="superhero")
+        self.title("🔐 RSA Attack Simulator")
+        self.state('zoomed')
+        self.configure(bg="#23272b")
+        self.shared = {}
+        tk.Label(self, text="RSA Attack Simulator", font=("Arial",36,"bold"),
+                 bg="#23272b", fg="#f8f9fa").pack(pady=(40,20))
+        btnf = ttk.Frame(self); btnf.pack(pady=20)
+        ttk.Button(btnf, text="🔑 Sinh khóa", style="success.TButton", width=20,
+                   command=lambda: KeyGenWindow(self, self.shared)).grid(row=0,column=0,padx=20)
+        ttk.Button(btnf, text="🔒 Mã hóa", style="info.TButton",    width=20,
+                   command=lambda: EncryptWindow(self, self.shared)).grid(row=0,column=1,padx=20)
+        ttk.Button(btnf, text="⚔️ Tấn công", style="danger.TButton", width=20,
+                   command=lambda: AttackWindow(self, self.shared)).grid(row=0,column=2,padx=20)
+        tk.Label(self, text="by MHH", font=("Arial",12,"italic"),
+                 bg="#23272b", fg="#adb5bd").pack(pady=(40,10))
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = RSAApp(root)
-    root.mainloop()
+    app = MainMenu()
+    app.mainloop()
